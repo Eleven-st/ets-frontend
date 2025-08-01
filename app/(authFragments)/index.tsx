@@ -1,3 +1,5 @@
+// File: ets-frontend/app/(authFragments)/index.tsx
+
 // Import custom themed components for consistent styling
 import { ThemedButton } from "@/components/ThemedButton";
 import { ThemedText } from "@/components/ThemedText";

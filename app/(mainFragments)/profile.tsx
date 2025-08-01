@@ -4,9 +4,8 @@ import { ThemedButton } from "@/components/ThemedButton";
 import { ThemedText } from "@/components/ThemedText";
 import { ThemedTextField } from "@/components/ThemedTextField";
 import { ThemedView } from "@/components/ThemedView";
-// --- IMPORTANT CHANGE 1: Update Axios imports ---
-import axios from "axios"; // Keep this for axios.isAxiosError
-import axiosInstance from "../../utils/axiosInstance"; // <-- NEW: Import your custom axios instance
+import axios from "axios";
+import axiosInstance from "../../utils/axiosInstance";
 
 import { useEffect, useState } from "react";
 import { StyleSheet, View, Text, ToastAndroid } from "react-native";
@@ -14,31 +13,35 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ThemedHeader } from "@/components/ThemedHeader";
 import { Image } from "react-native-ui-lib";
 import CarPNG from "../../assets/images/car.png";
-import { router } from "expo-router"; // <-- Add this import for potential redirection
+import { router, useLocalSearchParams } from "expo-router"; // <-- Added useLocalSearchParams
 
 export default function ProfileScreen() {
-    const [user, setUser] = useState<any>(null); // Initialize as null or undefined
-    const [userId, setUserId] = useState<string | null>(null); // Initialize as null
+    const [user, setUser] = useState<any>(null);
+    const [userId, setUserId] = useState<string | null>(null); // State to hold the userId
 
-    // Removed inputUserId and handleChange as they didn't seem to be used for actual input fields
+    const params = useLocalSearchParams(); // <-- NEW: Get parameters from the route
 
-    const fetchUserData = async (id: string) => {
+    // --- CRITICAL FIX: fetchUserData no longer needs an 'id' parameter ---
+    // The backend's /api/auth/user endpoint uses the JWT token for authentication
+    // and extracts the user ID from the token itself.
+    const fetchUserData = async () => { // Removed 'id' parameter
         try {
-            console.log("Fetching user data for ID:", id);
-            // --- IMPORTANT CHANGE 2: Use axiosInstance for the API call ---
-            const res = await axiosInstance.get( // <-- NEW: Use axiosInstance
-                `/api/user?user_id=${id}`
-            );
-            setUser(res.data);
-        } catch (err: any) { // Catch block specifically for Axios errors or network issues
-            console.error("Error fetching user data:", err); // Using console.error for errors
+            console.log("Fetching user profile via authenticated endpoint."); // Updated log
+            // --- FIXED: Correct endpoint and no user_id query param ---
+            const res = await axiosInstance.get("/api/auth/user"); // Corrected endpoint
+
+            // --- NEW LOG: Log the full response data from the backend ---
+            console.log("ProfileScreen: Full backend response for /api/auth/user:", res.data);
+
+            // --- FIXED: Access user_details from the response ---
+            setUser(res.data.user_details); // Backend sends user data inside 'user_details'
+        } catch (err: any) {
+            console.error("Error fetching user data:", err);
             let errorMessage = "Unable to load user profile.";
 
-            // --- IMPORTANT CHANGE 3: Add robust Axios error handling ---
-            if (axios.isAxiosError(err) && err.response) { // Use 'axios.isAxiosError'
+            if (axios.isAxiosError(err) && err.response) {
                 errorMessage = err.response.data?.message || `Server error: ${err.response.status}`;
                 if (err.response.status === 401 || err.response.status === 403) {
-                    // Token expired or invalid, redirect to login
                     ToastAndroid.show("Session expired. Please log in again.", ToastAndroid.LONG);
                     await AsyncStorage.removeItem("jwtToken"); // Clear invalid token
                     await AsyncStorage.removeItem("userId"); // Clear user ID
@@ -55,39 +58,54 @@ export default function ProfileScreen() {
         }
     };
 
+    // This function fetches the userId from AsyncStorage and updates the component state.
+    // It also handles redirection if no userId is found.
     const fetchUserIdFromStorage = async (): Promise<string | null> => {
         try {
+            // --- NEW LOGIC: Prioritize userId from route params ---
+            const paramUserId = params.userId as string | undefined; // Get userId from route params
+            if (paramUserId) {
+                console.log("ProfileScreen: Using userId from route params:", paramUserId); // NEW LOG
+                setUserId(paramUserId); // Update state
+                return paramUserId; // Return it for immediate use
+            }
+
+            // Fallback to AsyncStorage if no userId in params
             const storedUserId: string | null = await AsyncStorage.getItem("userId");
             if (storedUserId == null) {
-                console.warn("userId is null in AsyncStorage. User might not be logged in.");
-                router.replace("/(authFragments)"); // <-- Redirect if no userId found
+                console.warn("userId is null in AsyncStorage. User might not be logged in. Redirecting...");
+                router.replace("/(authFragments)"); // Redirect if no userId found
                 return null;
             }
-            setUserId(storedUserId); // Update the component's state with the fetched ID
-            return storedUserId;
+            console.log("ProfileScreen: Using userId from AsyncStorage:", storedUserId); // Updated log
+            setUserId(storedUserId); // Update state
+            return storedUserId; // Return it for immediate use
         } catch (err) {
-            console.error("Error fetching userId from AsyncStorage:", err);
-            ToastAndroid.show("Error accessing stored user data.", ToastAndroid.LONG); // <--- ADD THIS
-            router.replace("/(authFragments)"); // <-- Redirect on error
+            console.error("Error fetching userId from AsyncStorage or params:", err); // Updated log message
+            ToastAndroid.show("Error accessing stored user data.", ToastAndroid.LONG);
+            router.replace("/(authFragments)"); // Redirect on error
             return null; // Return null on error
         }
     };
 
-    // New function to orchestrate fetching both the userId and then the user data
+    // Orchestrates fetching both the userId and then the user data
     const loadUserProfile = async () => {
-        const storedId = await fetchUserIdFromStorage(); // Get the actual ID from AsyncStorage
+        // First, attempt to get the userId from route params or AsyncStorage
+        const storedId = await fetchUserIdFromStorage();
+        console.log("loadUserProfile: userId retrieved from storage/params:", storedId); // Debugging log
+
+        // Only proceed to fetch user data if a userId was successfully retrieved
         if (storedId) {
-            await fetchUserData(storedId); // Use the fetched ID to get user data
+            await fetchUserData(); // Call fetchUserData without the ID parameter
         } else {
-            // This block will now be mostly redundant if fetchUserIdFromStorage redirects
-            console.log("No user ID found in storage, cannot load profile. Redirecting...");
-            // router.replace({ pathname: "/(authFragments)" }); // Redirection now handled in fetchUserIdFromStorage
+            console.log("No user ID found in storage/params, cannot load profile. Redirection handled by fetchUserIdFromStorage.");
         }
     };
 
+    // useEffect hook to run `loadUserProfile` once when the component mounts
     useEffect(() => {
-        loadUserProfile(); // Call the new loading function when the component mounts
-    }, []); // Empty dependency array means it runs once on mount
+        loadUserProfile();
+    }, [params.userId]); // <-- MODIFIED: Added params.userId to dependencies to re-run if param changes
 
     return (
         <>
@@ -98,6 +116,8 @@ export default function ProfileScreen() {
                 lightColor="#fff"
             >
                 {/* Updated rendering logic based on userId and user state */}
+                {/* We now check for 'userId' to ensure a user ID was found in storage,
+                    and 'user' to ensure the profile data has been fetched. */}
                 {userId && user ? (
                     <View style={styles.containerFlex}>
                         <ThemedView style={styles.commonContainer}>
@@ -162,9 +182,8 @@ export default function ProfileScreen() {
                                 </ThemedView>
                             </ThemedView>
                         )}
-                        {/* Add a logout button here */}
                         <ThemedButton
-                            style={styles.logoutButton} // Define this style in your stylesheet
+                            style={styles.logoutButton}
                             label="Logout"
                             onPress={async () => {
                                 await AsyncStorage.removeItem("jwtToken");
@@ -175,7 +194,7 @@ export default function ProfileScreen() {
                     </View>
                 ) : userId === null ? ( // If userId is explicitly null (meaning not found in storage)
                     <ThemedText>Please sign in to view this page.</ThemedText>
-                ) : ( // If userId is undefined (initial state) or user is null (fetching)
+                ) : ( // If userId is found but user data is not yet loaded (user is null)
                     <ThemedText>Loading profile...</ThemedText>
                 )}
             </ThemedView>
@@ -218,9 +237,9 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         gap: 20,
     },
-    logoutButton: { // Style for the new logout button
+    logoutButton: {
         width: "90%",
         marginTop: 20,
-        backgroundColor: "red", // Example: red button for logout
+        backgroundColor: "red",
     },
 });
